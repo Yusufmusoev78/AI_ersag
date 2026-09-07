@@ -1,0 +1,8 @@
+anthropic
+python-docx
+openpyxl
+python-dotenv
+fastapi
+uvicorn
+google-genai
+python-multipart
