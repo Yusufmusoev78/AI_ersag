@@ -123,6 +123,45 @@
   }
   #settings-btn:hover { background: var(--panel-2); color: var(--text); transform: rotate(40deg); }
 
+  #model-picker { position: relative; }
+  #model-btn {
+    display: flex; align-items: center; gap: 6px;
+    height: 34px; padding: 0 12px;
+    border-radius: 10px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text-dim);
+    font-family: inherit; font-size: 12.5px; cursor: pointer;
+    max-width: 170px;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  #model-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+  #model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+  .model-caret { font-size: 9px; opacity: 0.6; transition: transform .15s; flex-shrink: 0; }
+  #model-picker.open .model-caret { transform: rotate(180deg); }
+  #model-dropdown {
+    position: absolute; top: calc(100% + 8px); right: 0;
+    min-width: 230px; max-height: 320px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow);
+    opacity: 0; visibility: hidden;
+    transform: translateY(-6px) scale(.97);
+    transition: opacity .15s, transform .15s, visibility .15s;
+    z-index: 900;
+    padding: 6px;
+  }
+  #model-picker.open #model-dropdown { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+  .model-option {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--text);
+  }
+  .model-option:hover { background: var(--panel-2); }
+  .model-option.current { background: linear-gradient(135deg, rgba(124,140,255,.18), rgba(166,133,255,.18)); }
+  .model-option .provider-tag {
+    font-size: 10px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .model-empty { padding: 10px; font-size: 12px; color: var(--text-dim); max-width: 220px; }
+
   #export-btn, #menu-btn {
     display: flex; align-items: center; justify-content: center;
     width: 34px; height: 34px;
@@ -718,6 +757,14 @@
       <span class="sub">Word &amp; Excel, handled for you</span>
     </div>
     <div id="status-pill"><span id="status-dot"></span><span id="status-text">Connecting…</span></div>
+    <div id="model-picker">
+      <button id="model-btn" title="Change model">
+        <span>🧠</span>
+        <span id="model-label">Model</span>
+        <span class="model-caret">▾</span>
+      </button>
+      <div id="model-dropdown"></div>
+    </div>
     <button id="export-btn" title="Export this chat">⬇️</button>
     <button id="settings-btn" title="Settings">⚙️</button>
   </div>
@@ -1523,6 +1570,99 @@ sidebarBackdrop.addEventListener("click", closeSidebar);
 chatList.addEventListener("click", closeSidebar);
 newChatBtn.addEventListener("click", closeSidebar);
 
+/* ---------- Model picker ---------- */
+const modelPicker = document.getElementById("model-picker");
+const modelBtn = document.getElementById("model-btn");
+const modelDropdown = document.getElementById("model-dropdown");
+const modelLabel = document.getElementById("model-label");
+let availableModels = [];
+let currentModel = "";
+
+function shortModelLabel(m) {
+  return m ? m.label.replace(/^Gemini\s*/i, "").replace(/^Claude\s*/i, "") : "Model";
+}
+
+function renderModelLabel() {
+  const found = availableModels.find((m) => m.id === currentModel);
+  modelLabel.textContent = found ? shortModelLabel(found) : (currentModel || "Model");
+}
+
+function renderModelDropdown() {
+  modelDropdown.innerHTML = "";
+  if (!availableModels.length) {
+    modelDropdown.innerHTML = '<div class="model-empty">No models available — add ANTHROPIC_API_KEY or GEMINI_API_KEY to office_agent/.env.</div>';
+    return;
+  }
+  availableModels.forEach((m) => {
+    const item = document.createElement("div");
+    item.className = "model-option" + (m.id === currentModel ? " current" : "");
+    item.innerHTML = `<span class="provider-tag">${escapeHtml(m.provider)}</span><span>${escapeHtml(m.label)}</span>`;
+    item.addEventListener("click", () => selectModel(m.id));
+    modelDropdown.appendChild(item);
+  });
+}
+
+async function loadModels() {
+  try {
+    const res = await fetch("/models");
+    const data = await res.json();
+    availableModels = data.models || [];
+    currentModel = data.current || "";
+  } catch (e) {
+    availableModels = [];
+    currentModel = "";
+  }
+  renderModelLabel();
+  renderModelDropdown();
+}
+
+async function selectModel(modelId) {
+  closeModelDropdown();
+  if (modelId === currentModel) return;
+  modelBtn.disabled = true;
+  try {
+    const res = await fetch("/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      appendMessage("error", err.detail || "Could not switch model");
+      return;
+    }
+    const data = await res.json();
+    currentModel = modelId;
+    currentConversationId = data.conversation_id;
+    viewingConversationId = data.conversation_id;
+    pendingAttachments = [];
+    renderPendingAttachments();
+    clearLog();
+    setReadOnly(false);
+    renderModelLabel();
+    renderModelDropdown();
+    const found = availableModels.find((m) => m.id === modelId);
+    appendMessage("system", `Switched to ${found ? found.label : modelId}. Started a new chat.`);
+    loadConversations();
+    inputBox.focus();
+  } catch (e) {
+    appendMessage("error", "Could not switch model: " + String(e));
+  } finally {
+    modelBtn.disabled = false;
+  }
+}
+
+function closeModelDropdown() {
+  modelPicker.classList.remove("open");
+}
+modelBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  modelPicker.classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!modelPicker.contains(e.target)) closeModelDropdown();
+});
+
 /* ---------- First-look welcome animation ---------- */
 function showWelcome() {
   const overlay = document.getElementById("welcome-overlay");
@@ -1565,6 +1705,7 @@ async function init() {
   }
   appendMessage("system", "Ready. Ask me to create, read, edit, or open a Word/Excel file.");
   loadConversations();
+  loadModels();
   inputBox.focus();
 }
 

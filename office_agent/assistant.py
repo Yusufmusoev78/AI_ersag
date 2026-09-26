@@ -6,11 +6,61 @@ from dotenv import load_dotenv
 
 import storage
 
+load_dotenv()
+
 
 def _extract_retry_delay(message: str) -> float | None:
     """Pull the server-suggested retry delay (e.g. "retryDelay': '57s'") out of an error string."""
     match = re.search(r"retryDelay['\"]?\s*:\s*['\"](\d+(?:\.\d+)?)s", message)
     return float(match.group(1)) if match else None
+
+
+CLAUDE_MODELS = [
+    {"id": "claude-opus-5", "label": "Claude Opus 5", "provider": "anthropic"},
+    {"id": "claude-sonnet-5", "label": "Claude Sonnet 5", "provider": "anthropic"},
+    {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "provider": "anthropic"},
+]
+
+_GEMINI_MODEL_PATTERN = re.compile(
+    r"^models/gemini-(?:[\d.]+-(?:flash|pro)(?:-lite)?|(?:flash|pro)-latest)$"
+)
+_GEMINI_MODELS_FALLBACK = [
+    {"id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "provider": "gemini"},
+    {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "provider": "gemini"},
+    {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "provider": "gemini"},
+]
+
+
+def _list_gemini_models() -> list[dict]:
+    """Ask the Gemini API which text-chat models this key can actually use."""
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        models = []
+        for m in client.models.list():
+            actions = getattr(m, "supported_actions", None) or []
+            if "generateContent" in actions and _GEMINI_MODEL_PATTERN.match(m.name):
+                models.append({
+                    "id": m.name.replace("models/", ""),
+                    "label": m.display_name or m.name,
+                    "provider": "gemini",
+                })
+        if models:
+            return sorted(models, key=lambda m: m["id"])
+    except Exception:
+        pass
+    return _GEMINI_MODELS_FALLBACK
+
+
+def list_available_models() -> list[dict]:
+    """List every model this deployment's API keys can actually use, for a model picker."""
+    models = []
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        models += CLAUDE_MODELS
+    if os.environ.get("GEMINI_API_KEY"):
+        models += _list_gemini_models()
+    return models
 
 SYSTEM_PROMPT = """You are an office assistant running on the user's own Windows PC. You help with
 Word (.docx) and Excel (.xlsx) documents, PDF files (.pdf), plain text files (.txt, .csv, .md, .json,
@@ -37,7 +87,7 @@ Rules:
 class ClaudeAssistant:
     """Office assistant backed by the Anthropic Claude API."""
 
-    def __init__(self):
+    def __init__(self, model: str = "claude-opus-5"):
         import anthropic
 
         from anthropic_tools import ALL_TOOLS
@@ -47,6 +97,7 @@ class ClaudeAssistant:
         self.client = anthropic.Anthropic()
         self.tools = ALL_TOOLS
         self.messages = []
+        self.model = model
 
     def send(self, user_text: str) -> str:
         import anthropic
@@ -59,7 +110,7 @@ class ClaudeAssistant:
         for attempt in range(attempts):
             try:
                 runner = self.client.beta.messages.tool_runner(
-                    model="claude-opus-5",
+                    model=self.model,
                     max_tokens=16000,
                     system=SYSTEM_PROMPT,
                     thinking={"type": "adaptive"},
@@ -101,7 +152,7 @@ class ClaudeAssistant:
 class GeminiAssistant:
     """Office assistant backed by Google Gemini, for testing without an Anthropic key."""
 
-    def __init__(self):
+    def __init__(self, model: str | None = None):
         from google import genai
         from google.genai import types
 
@@ -114,9 +165,9 @@ class GeminiAssistant:
             api_key=os.environ["GEMINI_API_KEY"],
             http_options=types.HttpOptions(timeout=60_000),
         )
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
         self.chat = self.client.chats.create(
-            model=model_name,
+            model=self.model,
             config=types.GenerateContentConfig(
                 tools=PLAIN_TOOLS,
                 system_instruction=SYSTEM_PROMPT,
@@ -137,6 +188,7 @@ class GeminiAssistant:
                 msg = str(exc)
                 rate_limited = "RESOURCE_EXHAUSTED" in msg or "429" in msg
                 overloaded = "503" in msg or "UNAVAILABLE" in msg
+                unavailable_model = "NOT_FOUND" in msg or "no longer available" in msg
                 if rate_limited and not is_last:
                     # The free Gemini tier caps requests per minute; the API tells us
                     # exactly how long to wait, so honor that instead of failing outright.
@@ -146,7 +198,12 @@ class GeminiAssistant:
                 if overloaded and not is_last:
                     time.sleep(2 * (attempt + 1))
                     continue
-                if rate_limited:
+                if unavailable_model:
+                    text = (
+                        f"The model '{self.model}' isn't available for this API key (Google may have "
+                        "retired it for new users). Please pick a different model from the model switcher."
+                    )
+                elif rate_limited:
                     text = (
                         "The free Gemini plan only allows a few requests per minute, and that "
                         "limit was just hit. Please wait about a minute and send your message again."
@@ -158,9 +215,17 @@ class GeminiAssistant:
         return text
 
 
-def get_assistant():
-    """Pick a provider based on which API key is configured in the environment."""
+def get_assistant(model_id: str | None = None):
+    """Pick a provider, either explicitly by model id or by whichever API key is configured."""
     load_dotenv()
+    if model_id:
+        if model_id.startswith("claude"):
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                raise RuntimeError("ANTHROPIC_API_KEY is not set; cannot use a Claude model.")
+            return ClaudeAssistant(model=model_id)
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise RuntimeError("GEMINI_API_KEY is not set; cannot use a Gemini model.")
+        return GeminiAssistant(model=model_id)
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeAssistant()
     if os.environ.get("GEMINI_API_KEY"):

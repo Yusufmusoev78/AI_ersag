@@ -1,3 +1,4 @@
+import os
 import shutil
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import storage
-from assistant import get_assistant
+from assistant import get_assistant, list_available_models
 
 app = FastAPI(title="Office AI Assistant API")
 
@@ -24,12 +25,13 @@ TEXT_EXTENSIONS = {".txt", ".csv", ".md", ".json", ".log", ".py", ".js", ".ts", 
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".docx", ".xlsx", ".pdf"}
 
 _bot = None
+_current_model: str | None = None
 
 
 def get_bot():
     global _bot
     if _bot is None:
-        _bot = get_assistant()
+        _bot = get_assistant(_current_model)
     return _bot
 
 
@@ -66,6 +68,21 @@ class ConversationMessage(BaseModel):
 
 class SessionInfo(BaseModel):
     conversation_id: int
+
+
+class ModelInfo(BaseModel):
+    id: str
+    label: str
+    provider: str
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelInfo]
+    current: str
+
+
+class SetModelRequest(BaseModel):
+    model: str
 
 
 class UploadResponse(BaseModel):
@@ -118,7 +135,34 @@ def session() -> SessionInfo:
 @app.post("/conversations/new", response_model=SessionInfo)
 def new_conversation() -> SessionInfo:
     global _bot
-    _bot = get_assistant()
+    _bot = get_assistant(_current_model)
+    return SessionInfo(conversation_id=_bot.conversation_id)
+
+
+@app.get("/models", response_model=ModelsResponse)
+def get_models() -> ModelsResponse:
+    models = list_available_models()
+    if _bot is not None:
+        current = _bot.model
+    elif _current_model:
+        current = _current_model
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        current = "claude-opus-5"
+    elif os.environ.get("GEMINI_API_KEY"):
+        current = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+    else:
+        current = models[0]["id"] if models else ""
+    return ModelsResponse(models=[ModelInfo(**m) for m in models], current=current)
+
+
+@app.post("/model", response_model=SessionInfo)
+def set_model(req: SetModelRequest) -> SessionInfo:
+    global _bot, _current_model
+    try:
+        _bot = get_assistant(req.model)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _current_model = req.model
     return SessionInfo(conversation_id=_bot.conversation_id)
 
 
