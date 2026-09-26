@@ -7,3 +7,4 @@ uvicorn
 google-genai
 python-multipart
 pypdf
+openai

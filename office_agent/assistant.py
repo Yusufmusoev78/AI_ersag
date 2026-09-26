@@ -1,3 +1,4 @@
+import inspect
 import os
 import re
 import time
@@ -53,6 +54,18 @@ def _list_gemini_models() -> list[dict]:
     return _GEMINI_MODELS_FALLBACK
 
 
+OPENCODE_FREE_MODELS = [
+    {"id": "big-pickle", "label": "Big Pickle (free)", "provider": "opencode"},
+    {"id": "space-bunny-free", "label": "Space Bunny (free)", "provider": "opencode"},
+    {"id": "longcat-2.5-preview-free", "label": "LongCat 2.5 Preview (free)", "provider": "opencode"},
+    {"id": "mimo-v2.6-flash-free", "label": "MiMo V2.6 Flash (free)", "provider": "opencode"},
+    {"id": "mimo-v2.5-free", "label": "MiMo V2.5 (free)", "provider": "opencode"},
+    {"id": "ling-3.0-flash-fin-free", "label": "Ling 3.0 Flash Fin (free)", "provider": "opencode"},
+    {"id": "nemotron-3-ultra-free", "label": "Nemotron 3 Ultra (free)", "provider": "opencode"},
+    {"id": "nemotron-3.5-lightning-free", "label": "Nemotron 3.5 Lightning (free)", "provider": "opencode"},
+]
+
+
 def list_available_models() -> list[dict]:
     """List every model this deployment's API keys can actually use, for a model picker."""
     models = []
@@ -60,6 +73,8 @@ def list_available_models() -> list[dict]:
         models += CLAUDE_MODELS
     if os.environ.get("GEMINI_API_KEY"):
         models += _list_gemini_models()
+    if os.environ.get("OPENCODE_API_KEY"):
+        models += OPENCODE_FREE_MODELS
     return models
 
 SYSTEM_PROMPT = """You are an office assistant running on the user's own Windows PC. You help with
@@ -215,23 +230,148 @@ class GeminiAssistant:
         return text
 
 
+def _json_schema_for(annotation) -> dict:
+    """Best-effort mapping from a Python type hint to a JSON Schema fragment."""
+    if annotation in (str, inspect.Parameter.empty):
+        return {"type": "string"}
+    if annotation is int:
+        return {"type": "integer"}
+    if annotation is float:
+        return {"type": "number"}
+    if annotation is bool:
+        return {"type": "boolean"}
+    origin = getattr(annotation, "__origin__", None)
+    if origin is list:
+        item_args = getattr(annotation, "__args__", (str,))
+        return {"type": "array", "items": _json_schema_for(item_args[0])}
+    return {"type": "string"}
+
+
+def _function_to_openai_tool(fn) -> dict:
+    """Turn one of our plain Python tool functions into an OpenAI-style function-calling schema."""
+    sig = inspect.signature(fn)
+    doc = inspect.getdoc(fn) or ""
+    description = doc.split("\n\n")[0].strip().replace("\n", " ")
+    properties = {}
+    required = []
+    for name, param in sig.parameters.items():
+        properties[name] = _json_schema_for(param.annotation)
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+    return {
+        "type": "function",
+        "function": {
+            "name": fn.__name__,
+            "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": required},
+        },
+    }
+
+
+class OpenCodeAssistant:
+    """Office assistant backed by OpenCode Zen's free, OpenAI-compatible model gateway."""
+
+    MAX_TOOL_ROUNDS = 8
+
+    def __init__(self, model: str | None = None):
+        from openai import OpenAI
+
+        from tools import PLAIN_TOOLS
+
+        storage.init_db()
+        self.conversation_id = storage.start_conversation()
+        self.client = OpenAI(
+            api_key=os.environ["OPENCODE_API_KEY"],
+            base_url="https://opencode.ai/zen/v1",
+        )
+        self.model = model or os.environ.get("OPENCODE_MODEL", "big-pickle")
+        self.tools_by_name = {fn.__name__: fn for fn in PLAIN_TOOLS}
+        self.tool_schemas = [_function_to_openai_tool(fn) for fn in PLAIN_TOOLS]
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    def send(self, user_text: str) -> str:
+        import json as _json
+
+        self.messages.append({"role": "user", "content": user_text})
+        storage.save_message(self.conversation_id, "user", user_text)
+
+        text = "(no response)"
+        try:
+            for _ in range(self.MAX_TOOL_ROUNDS):
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=self.messages,
+                    tools=self.tool_schemas,
+                )
+                message = response.choices[0].message
+                self.messages.append(message.model_dump(exclude_none=True))
+                if not message.tool_calls:
+                    text = (message.content or "").strip() or "(no text response)"
+                    break
+                for call in message.tool_calls:
+                    fn = self.tools_by_name.get(call.function.name)
+                    try:
+                        args = _json.loads(call.function.arguments or "{}")
+                        result = fn(**args) if fn else f"Unknown tool: {call.function.name}"
+                    except Exception as exc:
+                        result = f"Error running {call.function.name}: {exc}"
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": str(result),
+                    })
+            else:
+                text = "The assistant made too many tool calls in a row. Please try rephrasing your request."
+        except Exception as exc:
+            self.messages.pop()
+            text = f"Error talking to OpenCode: {exc}"
+
+        storage.save_message(self.conversation_id, "assistant", text)
+        return text
+
+
+_PROVIDER_CLASSES = {
+    "anthropic": ClaudeAssistant,
+    "gemini": GeminiAssistant,
+    "opencode": OpenCodeAssistant,
+}
+
+_PROVIDER_ENV_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
+}
+
+
 def get_assistant(model_id: str | None = None):
     """Pick a provider, either explicitly by model id or by whichever API key is configured."""
     load_dotenv()
     if model_id:
-        if model_id.startswith("claude"):
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise RuntimeError("ANTHROPIC_API_KEY is not set; cannot use a Claude model.")
-            return ClaudeAssistant(model=model_id)
-        if not os.environ.get("GEMINI_API_KEY"):
-            raise RuntimeError("GEMINI_API_KEY is not set; cannot use a Gemini model.")
-        return GeminiAssistant(model=model_id)
+        provider = next((m["provider"] for m in list_available_models() if m["id"] == model_id), None)
+        if provider is None:
+            # Not in the curated list (e.g. a custom GEMINI_MODEL override) — guess by prefix.
+            if model_id.startswith("claude"):
+                provider = "anthropic"
+            elif model_id.startswith("gemini"):
+                provider = "gemini"
+            else:
+                raise RuntimeError(
+                    f"Unknown model '{model_id}'. Make sure the matching API key "
+                    "(ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENCODE_API_KEY) is set in .env."
+                )
+        env_key = _PROVIDER_ENV_KEYS[provider]
+        if not os.environ.get(env_key):
+            raise RuntimeError(f"{env_key} is not set; cannot use model '{model_id}'.")
+        return _PROVIDER_CLASSES[provider](model=model_id)
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeAssistant()
     if os.environ.get("GEMINI_API_KEY"):
         return GeminiAssistant()
+    if os.environ.get("OPENCODE_API_KEY"):
+        return OpenCodeAssistant()
     raise RuntimeError(
-        "No API key found. Set ANTHROPIC_API_KEY (Claude) or GEMINI_API_KEY (Gemini) in .env."
+        "No API key found. Set ANTHROPIC_API_KEY (Claude), GEMINI_API_KEY (Gemini), "
+        "or OPENCODE_API_KEY (OpenCode Zen) in .env."
     )
 
 
