@@ -1,9 +1,16 @@
 import os
+import re
 import time
 
 from dotenv import load_dotenv
 
 import storage
+
+
+def _extract_retry_delay(message: str) -> float | None:
+    """Pull the server-suggested retry delay (e.g. "retryDelay': '57s'") out of an error string."""
+    match = re.search(r"retryDelay['\"]?\s*:\s*['\"](\d+(?:\.\d+)?)s", message)
+    return float(match.group(1)) if match else None
 
 SYSTEM_PROMPT = """You are an office assistant running on the user's own Windows PC. You help with
 Word (.docx) and Excel (.xlsx) documents, PDF files (.pdf), plain text files (.txt, .csv, .md, .json,
@@ -119,17 +126,33 @@ class GeminiAssistant:
     def send(self, user_text: str) -> str:
         storage.save_message(self.conversation_id, "user", user_text)
         attempts = 3
+        text = "(no response)"
         for attempt in range(attempts):
+            is_last = attempt == attempts - 1
             try:
                 response = self.chat.send_message(user_text)
                 text = (response.text or "").strip() or "(no text response)"
                 break
             except Exception as exc:
-                overloaded = "503" in str(exc) or "UNAVAILABLE" in str(exc)
-                if overloaded and attempt < attempts - 1:
+                msg = str(exc)
+                rate_limited = "RESOURCE_EXHAUSTED" in msg or "429" in msg
+                overloaded = "503" in msg or "UNAVAILABLE" in msg
+                if rate_limited and not is_last:
+                    # The free Gemini tier caps requests per minute; the API tells us
+                    # exactly how long to wait, so honor that instead of failing outright.
+                    delay = _extract_retry_delay(msg) or 20
+                    time.sleep(min(delay + 1, 60))
+                    continue
+                if overloaded and not is_last:
                     time.sleep(2 * (attempt + 1))
                     continue
-                text = f"Error talking to Gemini: {exc}"
+                if rate_limited:
+                    text = (
+                        "The free Gemini plan only allows a few requests per minute, and that "
+                        "limit was just hit. Please wait about a minute and send your message again."
+                    )
+                else:
+                    text = f"Error talking to Gemini: {exc}"
                 break
         storage.save_message(self.conversation_id, "assistant", text)
         return text
