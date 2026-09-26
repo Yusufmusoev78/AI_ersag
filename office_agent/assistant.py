@@ -1,23 +1,29 @@
 import os
+import time
 
 from dotenv import load_dotenv
 
 import storage
 
 SYSTEM_PROMPT = """You are an office assistant running on the user's own Windows PC. You help with
-Word (.docx) and Excel (.xlsx) documents, plain text files (.txt, .csv, .md, .json, .py, .js, .log, etc.),
-general questions, and writing code.
+Word (.docx) and Excel (.xlsx) documents, PDF files (.pdf), plain text files (.txt, .csv, .md, .json,
+.py, .js, .log, etc.), general questions, and writing code.
 
 Rules:
 - When the user uploads or references a file, its full path is given to you in the message. Read it with
-  read_docx, read_excel, or read_text_file (pick the one matching its extension) before doing anything else
-  with it, so you know what's actually in it.
+  read_docx, read_excel, read_pdf, or read_text_file (pick the one matching its extension) before doing
+  anything else with it, so you know what's actually in it.
 - Always read a file with read_docx/read_excel before editing it, so your edit matches what's there.
+- To make an Excel sheet look better, use format_excel_range (bold, colors, number formats) and
+  create_excel_chart (bar/line/pie) once the data is in place.
 - After creating or editing a Word/Excel file, open it with open_in_app so the user can see the change
   immediately, unless the user asked you not to.
 - Ask for a file's full path if it's ambiguous; use list_office_files to help locate files in a folder.
 - When you write code, put it in a fenced code block with the language tag (e.g. ```python), so it renders
   with a copy button in the UI. Keep prose explanations outside the code block.
+- A message may start with a bracketed note like "[About the user — always keep this in mind and follow
+  it]: ..." — that is a standing instruction from the user about themselves (e.g. their name, preferred
+  language, tone). Always honor it for the rest of the conversation, not just that one reply.
 """
 
 
@@ -36,24 +42,45 @@ class ClaudeAssistant:
         self.messages = []
 
     def send(self, user_text: str) -> str:
+        import anthropic
+
         self.messages.append({"role": "user", "content": user_text})
         storage.save_message(self.conversation_id, "user", user_text)
 
-        runner = self.client.beta.messages.tool_runner(
-            model="claude-opus-5",
-            max_tokens=16000,
-            system=SYSTEM_PROMPT,
-            thinking={"type": "adaptive"},
-            output_config={"effort": "high"},
-            tools=self.tools,
-            messages=self.messages,
-        )
-
+        attempts = 3
         last_message = None
-        for message in runner:
-            last_message = message
+        for attempt in range(attempts):
+            try:
+                runner = self.client.beta.messages.tool_runner(
+                    model="claude-opus-5",
+                    max_tokens=16000,
+                    system=SYSTEM_PROMPT,
+                    thinking={"type": "adaptive"},
+                    output_config={"effort": "high"},
+                    tools=self.tools,
+                    messages=self.messages,
+                )
+                for message in runner:
+                    last_message = message
+                break
+            except (anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError):
+                if attempt < attempts - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                self.messages.pop()
+                return "The AI service is unreachable right now. Please check your connection and try again."
+            except anthropic.APIStatusError as exc:
+                if exc.status_code >= 500 and attempt < attempts - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                self.messages.pop()
+                return f"The AI service returned an error ({exc.status_code}). Please try again in a moment."
+            except Exception as exc:
+                self.messages.pop()
+                return f"Something went wrong talking to the assistant: {exc}"
 
         if last_message is None:
+            self.messages.pop()
             return "(no response)"
 
         self.messages.append({"role": "assistant", "content": last_message.content})
@@ -91,11 +118,19 @@ class GeminiAssistant:
 
     def send(self, user_text: str) -> str:
         storage.save_message(self.conversation_id, "user", user_text)
-        try:
-            response = self.chat.send_message(user_text)
-            text = (response.text or "").strip() or "(no text response)"
-        except Exception as exc:
-            text = f"Error talking to Gemini: {exc}"
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                response = self.chat.send_message(user_text)
+                text = (response.text or "").strip() or "(no text response)"
+                break
+            except Exception as exc:
+                overloaded = "503" in str(exc) or "UNAVAILABLE" in str(exc)
+                if overloaded and attempt < attempts - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                text = f"Error talking to Gemini: {exc}"
+                break
         storage.save_message(self.conversation_id, "assistant", text)
         return text
 

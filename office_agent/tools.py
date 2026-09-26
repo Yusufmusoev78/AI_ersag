@@ -3,6 +3,9 @@ from pathlib import Path
 
 from docx import Document
 from openpyxl import Workbook, load_workbook
+from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.styles import Font, PatternFill
+from pypdf import PdfReader
 
 import storage
 
@@ -57,6 +60,36 @@ def open_in_app(path: str) -> str:
     os.startfile(file_path)
     storage.log_operation("open_in_app", str(file_path))
     return f"Opened {file_path} in its default application."
+
+
+# ---------------------------------------------------------------------------
+# PDF (.pdf)
+# ---------------------------------------------------------------------------
+
+
+def read_pdf(path: str, max_chars: int = 20000) -> str:
+    """Extract the text content of a PDF file, page by page.
+
+    Args:
+        path: Path to the .pdf file.
+        max_chars: Maximum number of characters to return, to avoid huge files (default 20000).
+    """
+    file_path = _abs(path)
+    if not file_path.is_file():
+        return f"Error: file not found: {file_path}"
+    try:
+        reader = PdfReader(str(file_path))
+    except Exception as exc:
+        return f"Error reading PDF: {exc}"
+    lines = []
+    for i, page in enumerate(reader.pages):
+        text = (page.extract_text() or "").strip()
+        if text:
+            lines.append(f"-- Page {i + 1} --\n{text}")
+    result = "\n\n".join(lines) if lines else "(no extractable text found)"
+    if len(result) > max_chars:
+        return result[:max_chars] + f"\n... [truncated, {len(result)} total characters]"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +318,100 @@ def _split_cell_ref(ref: str) -> tuple[int, int]:
     return column_index_from_string(col_letters), row
 
 
+def format_excel_range(
+    path: str,
+    sheet_name: str,
+    cell_range: str,
+    bold: bool = False,
+    italic: bool = False,
+    font_color: str = "",
+    fill_color: str = "",
+    number_format: str = "",
+) -> str:
+    """Apply visual formatting (bold, italic, font color, fill color, number format) to a cell range.
+
+    Args:
+        path: Path to the .xlsx file.
+        sheet_name: Sheet to format.
+        cell_range: Range to format, e.g. "A1:D1" or a single cell like "B2".
+        bold: Make the text bold.
+        italic: Make the text italic.
+        font_color: Hex RGB font color without '#', e.g. "FF0000" for red. Empty to leave unchanged.
+        fill_color: Hex RGB background fill color without '#', e.g. "FFFF00" for yellow. Empty to leave unchanged.
+        number_format: Excel number format string, e.g. "0.00", "#,##0", "0%". Empty to leave unchanged.
+    """
+    file_path = _abs(path)
+    if not file_path.is_file():
+        return f"Error: file not found: {file_path}"
+    wb = load_workbook(file_path)
+    sheet = wb[sheet_name] if sheet_name else wb.active
+    for row in sheet[cell_range]:
+        for cell in row:
+            if bold or italic or font_color:
+                cell.font = Font(
+                    bold=bold or cell.font.bold,
+                    italic=italic or cell.font.italic,
+                    color=font_color or cell.font.color,
+                )
+            if fill_color:
+                cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            if number_format:
+                cell.number_format = number_format
+    wb.save(file_path)
+    storage.log_operation("format_excel_range", str(file_path), f"{sheet.title}!{cell_range}")
+    return f"Formatted {cell_range} in {sheet.title} ({file_path})"
+
+
+def create_excel_chart(
+    path: str,
+    sheet_name: str,
+    data_range: str,
+    categories_range: str,
+    chart_type: str = "bar",
+    title: str = "",
+    anchor_cell: str = "F2",
+) -> str:
+    """Add a chart to an Excel sheet built from an existing data range.
+
+    Args:
+        path: Path to the .xlsx file.
+        sheet_name: Sheet containing the data (and where the chart will be placed).
+        data_range: Range of numeric values to plot, including its header row, e.g. "B1:B10".
+        categories_range: Range of category labels matching the data rows, e.g. "A2:A10".
+        chart_type: One of "bar", "line", "pie".
+        title: Chart title. Empty for no title.
+        anchor_cell: Top-left cell where the chart is placed, e.g. "F2".
+    """
+    file_path = _abs(path)
+    if not file_path.is_file():
+        return f"Error: file not found: {file_path}"
+    wb = load_workbook(file_path)
+    sheet = wb[sheet_name] if sheet_name else wb.active
+
+    chart_classes = {"bar": BarChart, "line": LineChart, "pie": PieChart}
+    chart_cls = chart_classes.get(chart_type.lower())
+    if chart_cls is None:
+        return f"Error: chart_type must be one of {list(chart_classes)}, got '{chart_type}'"
+    chart = chart_cls()
+    if title:
+        chart.title = title
+
+    data = Reference(sheet, range_string=f"'{sheet.title}'!{data_range}")
+    cats = Reference(sheet, range_string=f"'{sheet.title}'!{categories_range}")
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    sheet.add_chart(chart, anchor_cell)
+
+    wb.save(file_path)
+    storage.log_operation("create_excel_chart", str(file_path), f"{chart_type} chart on {sheet.title}")
+    return f"Added a {chart_type} chart to {sheet.title} at {anchor_cell} in {file_path}"
+
+
 PLAIN_TOOLS = [
     list_office_files,
     open_in_app,
     read_text_file,
+    read_pdf,
     read_docx,
     create_docx,
     edit_docx_text,
@@ -298,4 +421,6 @@ PLAIN_TOOLS = [
     create_excel,
     write_excel_cell,
     write_excel_range,
+    format_excel_range,
+    create_excel_chart,
 ]

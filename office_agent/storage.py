@@ -40,6 +40,9 @@ def init_db() -> None:
             );
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+        if "title" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -89,7 +92,7 @@ def list_conversations(limit: int = 50):
     try:
         cur = conn.execute(
             """
-            SELECT c.id, c.started_at,
+            SELECT c.id, c.started_at, c.title,
                    (SELECT content FROM messages m
                     WHERE m.conversation_id = c.id AND m.role = 'user'
                     ORDER BY m.id ASC LIMIT 1) AS first_message
@@ -100,6 +103,28 @@ def list_conversations(limit: int = 50):
             (limit,),
         )
         return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def rename_conversation(conversation_id: int, title: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ?",
+            (title.strip() or None, conversation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_conversation(conversation_id: int) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        conn.commit()
     finally:
         conn.close()
 

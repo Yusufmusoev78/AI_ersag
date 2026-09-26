@@ -21,7 +21,7 @@ app.add_middleware(
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 
 TEXT_EXTENSIONS = {".txt", ".csv", ".md", ".json", ".log", ".py", ".js", ".ts", ".html", ".css"}
-SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".docx", ".xlsx"}
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".docx", ".xlsx", ".pdf"}
 
 _bot = None
 
@@ -54,6 +54,10 @@ class ConversationSummary(BaseModel):
     started_at: str
 
 
+class RenameRequest(BaseModel):
+    title: str
+
+
 class ConversationMessage(BaseModel):
     role: str
     content: str
@@ -74,7 +78,10 @@ class UploadResponse(BaseModel):
 def chat(req: ChatRequest) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    reply = get_bot().send(req.message)
+    try:
+        reply = get_bot().send(req.message)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"The assistant is unavailable right now: {exc}")
     return ChatResponse(reply=reply)
 
 
@@ -119,8 +126,13 @@ def new_conversation() -> SessionInfo:
 def list_conversations() -> list[ConversationSummary]:
     rows = storage.list_conversations()
     result = []
-    for cid, started_at, first_message in rows:
-        title = (first_message or "").strip().splitlines()[0][:60] if first_message else "New chat"
+    for cid, started_at, custom_title, first_message in rows:
+        if custom_title:
+            title = custom_title
+        elif first_message:
+            title = first_message.strip().splitlines()[0][:60]
+        else:
+            title = "New chat"
         result.append(ConversationSummary(id=cid, title=title, started_at=started_at))
     return result
 
@@ -129,6 +141,30 @@ def list_conversations() -> list[ConversationSummary]:
 def conversation_messages(conversation_id: int) -> list[ConversationMessage]:
     rows = storage.get_conversation_messages(conversation_id)
     return [ConversationMessage(role=r, content=c, created_at=t) for r, c, t in rows]
+
+
+@app.patch("/conversations/{conversation_id}", response_model=ConversationSummary)
+def rename_conversation(conversation_id: int, req: RenameRequest) -> ConversationSummary:
+    if not req.title.strip():
+        raise HTTPException(status_code=400, detail="title must not be empty")
+    storage.rename_conversation(conversation_id, req.title)
+    rows = storage.list_conversations()
+    for cid, started_at, custom_title, _ in rows:
+        if cid == conversation_id:
+            return ConversationSummary(id=cid, title=custom_title or req.title, started_at=started_at)
+    raise HTTPException(status_code=404, detail="conversation not found")
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: int) -> dict:
+    global _bot
+    storage.delete_conversation(conversation_id)
+    if _bot is not None and _bot.conversation_id == conversation_id:
+        # The live assistant was pointing at the conversation we just deleted;
+        # drop it so the next /chat lazily starts a fresh one instead of
+        # failing a FOREIGN KEY check against a row that no longer exists.
+        _bot = None
+    return {"deleted": conversation_id}
 
 
 @app.get("/health")
