@@ -103,13 +103,14 @@ Rules:
 class ClaudeAssistant:
     """Office assistant backed by the Anthropic Claude API."""
 
-    def __init__(self, model: str = "claude-opus-5"):
+    def __init__(self, model: str = "claude-opus-5", user_id: int | None = None):
         import anthropic
 
         from anthropic_tools import ALL_TOOLS
 
         storage.init_db()
-        self.conversation_id = storage.start_conversation()
+        self.user_id = user_id
+        self.conversation_id = storage.start_conversation(user_id)
         self.client = anthropic.Anthropic()
         self.tools = ALL_TOOLS
         self.messages = []
@@ -168,14 +169,15 @@ class ClaudeAssistant:
 class GeminiAssistant:
     """Office assistant backed by Google Gemini, for testing without an Anthropic key."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, user_id: int | None = None):
         from google import genai
         from google.genai import types
 
         from tools import PLAIN_TOOLS
 
         storage.init_db()
-        self.conversation_id = storage.start_conversation()
+        self.user_id = user_id
+        self.conversation_id = storage.start_conversation(user_id)
 
         self.client = genai.Client(
             api_key=os.environ["GEMINI_API_KEY"],
@@ -274,13 +276,14 @@ class OpenCodeAssistant:
 
     MAX_TOOL_ROUNDS = 8
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, user_id: int | None = None):
         from openai import OpenAI
 
         from tools import PLAIN_TOOLS
 
         storage.init_db()
-        self.conversation_id = storage.start_conversation()
+        self.user_id = user_id
+        self.conversation_id = storage.start_conversation(user_id)
         self.client = OpenAI(
             api_key=os.environ["OPENCODE_API_KEY"],
             base_url="https://opencode.ai/zen/v1",
@@ -344,7 +347,7 @@ _PROVIDER_ENV_KEYS = {
 }
 
 
-def get_assistant(model_id: str | None = None):
+def get_assistant(model_id: str | None = None, user_id: int | None = None):
     """Pick a provider, either explicitly by model id or by whichever API key is configured."""
     load_dotenv()
     if model_id:
@@ -363,13 +366,13 @@ def get_assistant(model_id: str | None = None):
         env_key = _PROVIDER_ENV_KEYS[provider]
         if not os.environ.get(env_key):
             raise RuntimeError(f"{env_key} is not set; cannot use model '{model_id}'.")
-        return _PROVIDER_CLASSES[provider](model=model_id)
+        return _PROVIDER_CLASSES[provider](model=model_id, user_id=user_id)
     if os.environ.get("ANTHROPIC_API_KEY"):
-        return ClaudeAssistant()
+        return ClaudeAssistant(user_id=user_id)
     if os.environ.get("GEMINI_API_KEY"):
-        return GeminiAssistant()
+        return GeminiAssistant(user_id=user_id)
     if os.environ.get("OPENCODE_API_KEY"):
-        return OpenCodeAssistant()
+        return OpenCodeAssistant(user_id=user_id)
     raise RuntimeError(
         "No API key found. Set ANTHROPIC_API_KEY (Claude), GEMINI_API_KEY (Gemini), "
         "or OPENCODE_API_KEY (OpenCode Zen) in .env."

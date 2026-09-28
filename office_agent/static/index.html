@@ -247,13 +247,6 @@
     padding: 10px 12px; outline: none; transition: border-color .15s;
   }
   #about-you:focus { border-color: var(--accent); }
-  #user-name {
-    width: 100%;
-    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px;
-    color: var(--text); font-family: inherit; font-size: 13px;
-    padding: 10px 12px; outline: none; transition: border-color .15s;
-  }
-  #user-name:focus { border-color: var(--accent); }
   .settings-footer {
     padding: 14px 18px; border-top: 1px solid var(--border);
     display: flex; justify-content: flex-end; gap: 8px;
@@ -370,7 +363,84 @@
     font-size: 12px; font-weight: 600; color: #10122a;
     flex-shrink: 0;
   }
-  #sidebar-footer .label { font-size: 12.5px; color: var(--text-dim); }
+  #sidebar-footer .label {
+    font-size: 12.5px; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #logout-btn {
+    display: flex; align-items: center; justify-content: center;
+    margin-left: auto; flex-shrink: 0;
+    width: 26px; height: 26px;
+    border: none; border-radius: 8px;
+    background: none; color: var(--text-dim);
+    cursor: pointer;
+  }
+  #logout-btn svg { width: 13px; height: 13px; }
+  #logout-btn:hover { background: var(--panel); color: var(--error); }
+
+  /* ---------- Auth (sign in / create account) ---------- */
+  #auth-overlay {
+    position: fixed; inset: 0; z-index: 2000;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg);
+    padding: 16px;
+  }
+  #auth-card {
+    width: min(360px, 100%);
+    padding: 32px 28px;
+    border-radius: 18px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: 16px;
+    animation: welcomeIn .5s cubic-bezier(.34,1.56,.64,1);
+  }
+  #auth-title {
+    text-align: center; font-weight: 700; font-size: 18px;
+    background: var(--accent-grad);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #auth-tabs { display: flex; gap: 4px; background: var(--panel-2); padding: 4px; border-radius: 10px; }
+  .auth-tab {
+    flex: 1; padding: 8px; border: none; border-radius: 8px;
+    background: transparent; color: var(--text-dim);
+    font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .auth-tab.active { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+  .auth-form { display: flex; flex-direction: column; gap: 10px; }
+  .auth-form input {
+    width: 100%; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--bg-soft);
+    color: var(--text); font-family: inherit; font-size: 13.5px; outline: none;
+    transition: border-color .15s;
+  }
+  .auth-form input:focus { border-color: var(--accent); }
+  .auth-submit {
+    padding: 10px; border-radius: 10px; border: none;
+    background: var(--accent-grad); color: #10122a;
+    font-family: inherit; font-weight: 700; font-size: 13.5px; cursor: pointer;
+    transition: transform .12s;
+  }
+  .auth-submit:hover:not(:disabled) { transform: translateY(-1px); }
+  .auth-submit:disabled { opacity: 0.6; cursor: default; transform: none; }
+  #auth-error {
+    display: none;
+    font-size: 12.5px; color: var(--error);
+    background: rgba(255,107,107,0.1); border: 1px solid rgba(255,107,107,0.3);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  #auth-error.show { display: block; }
+  #auth-divider { display: flex; align-items: center; gap: 10px; color: var(--text-dim); font-size: 11px; }
+  #auth-divider::before, #auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  #google-btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg-soft); color: var(--text);
+    font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  #google-btn:hover { background: var(--panel-2); border-color: var(--accent); }
 
   #chat-col {
     flex: 1;
@@ -846,8 +916,11 @@
       <div class="side-section-label">Chats</div>
       <div id="chat-list"></div>
       <div id="sidebar-footer">
-        <div class="avatar-sm">A</div>
-        <span class="label">Local session</span>
+        <div class="avatar-sm" id="footer-avatar">U</div>
+        <span class="label" id="footer-username">Signed out</span>
+        <button id="logout-btn" title="Sign out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+        </button>
       </div>
     </div>
     <div id="chat-col">
@@ -909,10 +982,6 @@
           </div>
         </div>
         <div class="settings-section">
-          <div class="settings-label">Your name</div>
-          <input id="user-name" type="text" placeholder="e.g. Yusuf" />
-        </div>
-        <div class="settings-section">
           <div class="settings-label">Avatar color</div>
           <div id="avatar-grid" class="avatar-grid"></div>
         </div>
@@ -925,6 +994,33 @@
       <div class="settings-footer">
         <button id="settings-save">Save</button>
       </div>
+    </div>
+  </div>
+
+  <div id="auth-overlay">
+    <div id="auth-card">
+      <div id="auth-title">Office AI Assistant</div>
+      <div id="auth-tabs">
+        <button type="button" class="auth-tab active" data-tab="login">Sign in</button>
+        <button type="button" class="auth-tab" data-tab="register">Create account</button>
+      </div>
+      <div id="auth-error"></div>
+      <form id="login-form" class="auth-form">
+        <input type="text" id="login-username" placeholder="Username" autocomplete="username" required />
+        <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required />
+        <button type="submit" class="auth-submit">Sign in</button>
+      </form>
+      <form id="register-form" class="auth-form" style="display:none">
+        <input type="text" id="register-username" placeholder="Username" autocomplete="username" required />
+        <input type="email" id="register-email" placeholder="Email (optional)" autocomplete="email" />
+        <input type="password" id="register-password" placeholder="Password (min 6 characters)" autocomplete="new-password" required />
+        <button type="submit" class="auth-submit">Create account</button>
+      </form>
+      <div id="auth-divider" style="display:none"><span>or</span></div>
+      <button id="google-btn" type="button" style="display:none">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29A11.98 11.98 0 000 12c0 1.92.46 3.74 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"/></svg>
+        <span>Continue with Google</span>
+      </button>
     </div>
   </div>
 
@@ -942,8 +1038,10 @@ const fileInput = document.getElementById("file-input");
 const ROLE_LABELS = { you: "You", assistant: "Assistant", system: "System", error: "Error" };
 const ROLE_AVATAR_TEXT = { assistant: "AI", system: "i", error: "!" };
 
+let currentUser = null;
+
 function userInitial() {
-  const name = (settings.userName || "").trim();
+  const name = currentUser ? currentUser.username : "";
   return name ? name[0].toUpperCase() : "U";
 }
 
@@ -1012,6 +1110,8 @@ function applyAvatarColor(color) {
   document.querySelectorAll(".row.you .avatar").forEach((el) => {
     el.style.background = color;
   });
+  const footerAvatar = document.getElementById("footer-avatar");
+  if (footerAvatar) footerAvatar.style.background = color;
 }
 
 function buildAvatarGrid() {
@@ -1027,9 +1127,26 @@ function buildAvatarGrid() {
     btn.addEventListener("click", () => {
       settings = saveSettings({ avatarColor: color });
       applyAvatarColor(color);
+      if (currentUser) {
+        fetch("/auth/avatar-color", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ color }),
+        }).catch(() => {});
+      }
     });
     grid.appendChild(btn);
   });
+}
+
+function updateSidebarFooter() {
+  const labelEl = document.getElementById("footer-username");
+  const avatarEl = document.getElementById("footer-avatar");
+  if (currentUser) {
+    labelEl.textContent = currentUser.username;
+    avatarEl.textContent = userInitial();
+    avatarEl.style.background = currentAvatarColor();
+  }
 }
 
 let currentConversationId = null;   // the live, writable conversation
@@ -1531,8 +1648,8 @@ async function sendMessage() {
   appendUserMessage(text, attachments);
   let backendText = buildBackendText(text, attachments);
   const profileBits = [];
-  if (settings.userName && settings.userName.trim()) {
-    profileBits.push(`The user's name is ${settings.userName.trim()}.`);
+  if (currentUser && currentUser.username) {
+    profileBits.push(`The user's name is ${currentUser.username}.`);
   }
   if (settings.aboutMe && settings.aboutMe.trim()) {
     profileBits.push(settings.aboutMe.trim());
@@ -1635,11 +1752,9 @@ const settingsOverlay = document.getElementById("settings-overlay");
 const settingsClose = document.getElementById("settings-close");
 const settingsSaveBtn = document.getElementById("settings-save");
 const aboutYouBox = document.getElementById("about-you");
-const userNameBox = document.getElementById("user-name");
 
 function openSettings() {
   aboutYouBox.value = settings.aboutMe || "";
-  userNameBox.value = settings.userName || "";
   settingsOverlay.classList.add("active");
 }
 function closeSettings() {
@@ -1664,7 +1779,6 @@ document.querySelectorAll(".theme-btn").forEach((btn) => {
 settingsSaveBtn.addEventListener("click", () => {
   settings = saveSettings({
     aboutMe: aboutYouBox.value.trim(),
-    userName: userNameBox.value.trim(),
   });
   closeSettings();
 });
@@ -1808,20 +1922,19 @@ document.addEventListener("click", (e) => {
 /* ---------- First-look welcome animation ---------- */
 function showWelcome() {
   const overlay = document.getElementById("welcome-overlay");
-  if (!settings.userName || !settings.userName.trim()) {
+  if (!currentUser) {
     overlay.remove();
     return;
   }
   const textEl = document.getElementById("welcome-text");
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  textEl.textContent = `${greeting}, ${settings.userName.trim()}!`;
+  textEl.textContent = `${greeting}, ${currentUser.username}!`;
   setTimeout(() => {
     overlay.classList.add("hide");
     setTimeout(() => overlay.remove(), 600);
   }, 1500);
 }
-showWelcome();
 
 async function checkHealth() {
   try {
@@ -1835,7 +1948,7 @@ async function checkHealth() {
 }
 setInterval(checkHealth, 20000);
 
-async function init() {
+async function startApp() {
   checkHealth();
   try {
     const res = await fetch("/session");
@@ -1845,13 +1958,147 @@ async function init() {
   } catch (e) {
     // backend not reachable yet; conversation list/new-chat will still work once it is
   }
+  showWelcome();
   appendMessage("system", "Ready. Ask me to create, read, edit, or open a Word/Excel file.");
   loadConversations();
   loadModels();
   inputBox.focus();
 }
 
-init();
+/* ---------- Auth (sign in / create account / Google) ---------- */
+const authOverlay = document.getElementById("auth-overlay");
+const authError = document.getElementById("auth-error");
+const googleBtn = document.getElementById("google-btn");
+const authDivider = document.getElementById("auth-divider");
+
+function setAuthError(msg) {
+  if (!msg) {
+    authError.classList.remove("show");
+    authError.textContent = "";
+    return;
+  }
+  authError.textContent = msg;
+  authError.classList.add("show");
+}
+
+document.querySelectorAll(".auth-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".auth-tab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    const target = tab.dataset.tab;
+    document.getElementById("login-form").style.display = target === "login" ? "flex" : "none";
+    document.getElementById("register-form").style.display = target === "register" ? "flex" : "none";
+    setAuthError("");
+  });
+});
+
+async function onAuthenticated() {
+  authOverlay.remove();
+  if (currentUser.avatar_color) {
+    settings = saveSettings({ avatarColor: currentUser.avatar_color });
+  }
+  applyAvatarColor(currentAvatarColor());
+  updateSidebarFooter();
+  await startApp();
+}
+
+document.getElementById("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setAuthError("");
+  const username = document.getElementById("login-username").value.trim();
+  const password = document.getElementById("login-password").value;
+  const btn = e.target.querySelector(".auth-submit");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setAuthError(data.detail || "Sign in failed"); return; }
+    currentUser = data;
+    await onAuthenticated();
+  } catch (err) {
+    setAuthError(String(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("register-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setAuthError("");
+  const username = document.getElementById("register-username").value.trim();
+  const email = document.getElementById("register-email").value.trim();
+  const password = document.getElementById("register-password").value;
+  const btn = e.target.querySelector(".auth-submit");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setAuthError(data.detail || "Could not create account"); return; }
+    currentUser = data;
+    await onAuthenticated();
+  } catch (err) {
+    setAuthError(String(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+googleBtn.addEventListener("click", () => {
+  window.location.href = "/auth/google";
+});
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  try {
+    await fetch("/auth/logout", { method: "POST" });
+  } catch (e) {}
+  window.location.reload();
+});
+
+async function loadAuthStatus() {
+  try {
+    const res = await fetch("/auth/status");
+    const data = await res.json();
+    googleBtn.style.display = data.google_enabled ? "flex" : "none";
+    authDivider.style.display = data.google_enabled ? "flex" : "none";
+  } catch (e) {}
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch("/auth/me");
+    if (res.ok) {
+      currentUser = await res.json();
+      return true;
+    }
+  } catch (e) {}
+  currentUser = null;
+  return false;
+}
+
+async function bootstrap() {
+  loadAuthStatus();
+  const authed = await checkAuth();
+  if (authed) {
+    authOverlay.remove();
+    updateSidebarFooter();
+    if (currentUser.avatar_color) {
+      settings = saveSettings({ avatarColor: currentUser.avatar_color });
+      applyAvatarColor(currentAvatarColor());
+    }
+    await startApp();
+  }
+  // else: the auth overlay stays up until the user signs in or registers.
+}
+
+bootstrap();
 </script>
 </body>
 </html>

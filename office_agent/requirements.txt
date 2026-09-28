@@ -8,3 +8,4 @@ google-genai
 python-multipart
 pypdf
 openai
+httpx
