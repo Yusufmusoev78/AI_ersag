@@ -39,8 +39,19 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class FileRef(BaseModel):
+    path: str
+    name: str
+    tool: str
+
+
 class ChatResponse(BaseModel):
     reply: str
+    files: list[FileRef] = []
+
+
+class OpenRequest(BaseModel):
+    path: str
 
 
 class OperationItem(BaseModel):
@@ -95,11 +106,29 @@ class UploadResponse(BaseModel):
 def chat(req: ChatRequest) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
+    watermark = storage.latest_operation_id()
     try:
         reply = get_bot().send(req.message)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"The assistant is unavailable right now: {exc}")
-    return ChatResponse(reply=reply)
+
+    touched: dict[str, str] = {}
+    for tool_name, file_path in storage.operations_since(watermark):
+        if tool_name == "open_in_app":
+            continue
+        touched[file_path] = tool_name  # last tool wins if a file was touched more than once
+    files = [FileRef(path=p, name=Path(p).name, tool=t) for p, t in touched.items()]
+    return ChatResponse(reply=reply, files=files)
+
+
+@app.post("/open")
+def open_file(req: OpenRequest) -> dict:
+    file_path = Path(req.path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    os.startfile(str(file_path))
+    storage.log_operation("open_in_app", str(file_path))
+    return {"opened": str(file_path)}
 
 
 @app.post("/upload", response_model=UploadResponse)

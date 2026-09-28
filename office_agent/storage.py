@@ -153,3 +153,24 @@ def recent_operations(limit: int = 20):
         return cur.fetchall()
     finally:
         conn.close()
+
+
+def latest_operation_id() -> int:
+    conn = _connect()
+    try:
+        cur = conn.execute("SELECT COALESCE(MAX(id), 0) FROM file_operations")
+        return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def operations_since(operation_id: int):
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "SELECT tool_name, file_path FROM file_operations WHERE id > ? ORDER BY id ASC",
+            (operation_id,),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()

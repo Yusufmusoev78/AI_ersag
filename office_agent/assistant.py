@@ -88,8 +88,9 @@ Rules:
 - Always read a file with read_docx/read_excel before editing it, so your edit matches what's there.
 - To make an Excel sheet look better, use format_excel_range (bold, colors, number formats) and
   create_excel_chart (bar/line/pie) once the data is in place.
-- After creating or editing a Word/Excel file, open it with open_in_app so the user can see the change
-  immediately, unless the user asked you not to.
+- After creating or editing a Word/Excel file, do NOT open it automatically. The app already shows the
+  user the file with a button to open it themselves. Only call open_in_app if the user explicitly asks
+  you to open a file.
 - Ask for a file's full path if it's ambiguous; use list_office_files to help locate files in a folder.
 - When you write code, put it in a fenced code block with the language tag (e.g. ```python), so it renders
   with a copy button in the UI. Keep prose explanations outside the code block.

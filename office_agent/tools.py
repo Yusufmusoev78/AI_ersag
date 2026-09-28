@@ -135,9 +135,7 @@ def create_docx(path: str, title: str, paragraphs: list[str]) -> str:
         doc.add_paragraph(para)
     doc.save(file_path)
     storage.log_operation("create_docx", str(file_path), title)
-    os.startfile(file_path)
-    storage.log_operation("open_in_app", str(file_path))
-    return f"Created and opened {file_path}"
+    return f"Created {file_path}"
 
 
 def edit_docx_text(path: str, find: str, replace: str) -> str:
@@ -263,9 +261,7 @@ def create_excel(path: str, sheet_name: str, headers: list[str], rows: list[list
         sheet.append([_coerce(cell) for cell in row])
     wb.save(file_path)
     storage.log_operation("create_excel", str(file_path), sheet_name)
-    os.startfile(file_path)
-    storage.log_operation("open_in_app", str(file_path))
-    return f"Created and opened {file_path}"
+    return f"Created {file_path}"
 
 
 def write_excel_cell(path: str, sheet_name: str, cell: str, value: str) -> str:
